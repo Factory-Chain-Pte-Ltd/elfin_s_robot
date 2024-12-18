@@ -11,7 +11,7 @@ find_package(catkin REQUIRED COMPONENTS
   control_toolbox
   controller_manager
   elfin_robot_msgs
-  elfin_ethercat_driver
+  elfin_tcp
   hardware_interface
   elfin_hardware_interface
   joint_limits_interface
@@ -114,7 +114,7 @@ find_package(catkin REQUIRED COMPONENTS
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
 #  INCLUDE_DIRS include
-#  LIBRARIES elfin_ros_control
+  # LIBRARIES elfin_tcp
 #  CATKIN_DEPENDS actionlib cmake_modules control_msgs control_toolbox controller_manager hardware_interface joint_limits_interface roscpp sensor_msgs std_msgs trajectory_msgs transmission_interface urdf
 #  DEPENDS system_lib
 )
@@ -131,11 +131,26 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
 )
 
-## Declare a C++ library
-#add_library(elfin_hardware_interface
-#  src/elfin_hardware_interface.cpp
-#)
+link_directories( 
+  ${catkin_LIB_DIRS}
+)
 
+add_library(elfin_default_log
+  src/elfin_log.cpp
+  src/elfin_default_log_handler.cpp
+)
+target_link_libraries(
+  elfin_default_log ${catkin_LIBRARIES} ${LAPACK_LIBRARIES}
+)
+
+add_library(elfin_log_handler
+  src/elfin_data_log_handler.cpp
+)
+
+target_link_libraries(elfin_log_handler ${catkin_LIBRARIES} ${LAPACK_LIBRARIES}
+  ${CATKIN_DEVEL_PREFIX}/lib/libelfin_default_log.so  
+)
+add_dependencies(elfin_log_handler ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 ## Add cmake target dependencies of the library
 ## as an example, code may need to be generated before libraries
 ## either from message generation or dynamic reconfigure
@@ -149,9 +164,12 @@ add_executable(elfin_hardware_interface src/elfin_hardware_interface.cpp)
 add_dependencies(elfin_hardware_interface ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 # Specify libraries to link a library or executable target against
+# ${CATKIN_DEVEL_PREFIX}/lib/libelfin_servo.so
 target_link_libraries(elfin_hardware_interface
-  ${catkin_LIBRARIES}
-)
+  ${CATKIN_DEVEL_PREFIX}/lib/libelfin_default_log.so  
+  ${CATKIN_DEVEL_PREFIX}/lib/libelfin_log_handler.so ${CATKIN_DEVEL_PREFIX}/lib/libelfin_control.so  
+  ${CATKIN_DEVEL_PREFIX}/lib/libelfin_state.so ${catkin_LIBRARIES} 
+  ) 
 
 #############
 ## Install ##

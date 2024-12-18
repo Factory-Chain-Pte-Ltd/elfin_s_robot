@@ -69,10 +69,7 @@ public:
     bool setEndLink_cb(elfin_robot_msgs::SetString::Request &req, elfin_robot_msgs::SetString::Response &resp);
     bool enableRobot_cb(std_srvs::SetBool::Request &req, std_srvs::SetBool::Response &resp);
     bool disableRobot_cb(std_srvs::SetBool::Request &req, std_srvs::SetBool::Response &resp);
-
-    bool stopActCtrlrs(std_srvs::SetBool::Response &resp);
-    bool startElfinCtrlr(std_srvs::SetBool::Response &resp);
-
+void posePubTimer_cb(const ros::TimerEvent& evt);
 private:
     moveit::planning_interface::MoveGroupInterface *group_;
     moveit::planning_interface::PlanningSceneInterface planning_scene_interface_;
@@ -91,25 +88,12 @@ private:
 
     ros::ServiceServer set_ref_link_server_;
     ros::ServiceServer set_end_link_server_;
-    ros::ServiceServer enable_robot_server_;
-    ros::ServiceServer disable_robot_server_;
-
-    std::string elfin_controller_name_;
-    std::vector<std::string> controller_joint_names_;
+    
+        std::vector<std::string> controller_joint_names_;
 
     ros::ServiceClient switch_controller_client_;
     ros::ServiceClient list_controllers_client_;
-    ros::ServiceClient get_motion_state_client_;
-    ros::ServiceClient get_pos_align_state_client_;
-
-    std_srvs::SetBool::Request raw_enable_robot_request_;
-    std_srvs::SetBool::Response raw_enable_robot_response_;
-    ros::ServiceClient raw_enable_robot_client_;
-
-    std_srvs::SetBool::Request raw_disable_robot_request_;
-    std_srvs::SetBool::Response raw_disable_robot_response_;
-    ros::ServiceClient raw_disable_robot_client_;
-
+    
     std_msgs::String ref_link_name_msg_;
     std_msgs::String end_link_name_msg_;
 

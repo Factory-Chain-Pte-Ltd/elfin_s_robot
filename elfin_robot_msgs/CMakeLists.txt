@@ -5,9 +5,11 @@ project(elfin_robot_msgs)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
+  industrial_msgs
   message_generation
   message_runtime
   std_msgs
+  trajectory_msgs
 )
 
 ## System dependencies are found with CMake's conventions
@@ -44,11 +46,14 @@ find_package(catkin REQUIRED COMPONENTS
 ##   * add every package in MSG_DEP_SET to generate_messages(DEPENDENCIES ...)
 
 ## Generate messages in the 'msg' folder
-# add_message_files(
-#   FILES
-#   Message1.msg
-#   Message2.msg
-# )
+add_message_files(
+  FILES
+  DynamicJointPoint.msg
+  DynamicJointsGroup.msg
+  DynamicJointState.msg
+  DynamicJointTrajectory.msg
+  DynamicJointTrajectoryFeedback.msg
+)
 
 # Generate services in the 'srv' folder
 add_service_files(
@@ -58,6 +63,15 @@ add_service_files(
   SetFloat64.srv
   ElfinIODRead.srv
   ElfinIODWrite.srv
+  ElfinDOCmd.srv
+  CmdJointTrajectoryEx.srv
+  ReadGroupIO.srv
+  ReadMRegister.srv
+  ReadSingleIO.srv
+  SelectTool.srv
+  WriteGroupIO.srv
+  WriteMRegister.srv
+  WriteSingleIO.srv
 )
 
 ## Generate actions in the 'action' folder
@@ -70,7 +84,9 @@ add_service_files(
 # Generate added messages and services with any dependencies listed here
 generate_messages(
   DEPENDENCIES
+  industrial_msgs
   std_msgs
+  trajectory_msgs
 )
 
 ################################################

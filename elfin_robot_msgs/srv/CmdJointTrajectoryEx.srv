@@ -1,0 +1,5 @@
+
+
+elfin_robot_msgs/DynamicJointTrajectory trajectory
+---
+industrial_msgs/ServiceReturnCode code

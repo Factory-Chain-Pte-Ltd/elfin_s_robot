@@ -46,10 +46,10 @@ import math
 import os # 20201209: add os path
 import tf
 import moveit_commander
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, String, Int32, Float64,Int32MultiArray
 from std_srvs.srv import SetBool, SetBoolRequest, SetBoolResponse
 from elfin_robot_msgs.srv import SetString, SetStringRequest, SetStringResponse
-from elfin_robot_msgs.srv import SetInt16, SetInt16Request
+from elfin_robot_msgs.srv import SetInt16, SetInt16Request, ElfinDOCmd
 from elfin_robot_msgs.srv import *
 import wx
 from sensor_msgs.msg import JointState
@@ -61,7 +61,7 @@ import dynamic_reconfigure.client
 class MyFrame(wx.Frame):  
   
     def __init__(self,parent,id):  
-        the_size=(700, 700) # height from 550 change to 700
+        the_size=(700, 800) # height from 550 change to 700
         wx.Frame.__init__(self,parent,id,'Elfin Control Panel',pos=(250,100)) 
         self.panel=wx.Panel(self)
         font=self.panel.GetFont()
@@ -78,19 +78,19 @@ class MyFrame(wx.Frame):
         self.elfin_driver_ns='elfin_ros_control/elfin/'
         self.elfin_IO_ns='elfin_ros_control/elfin/io_port1/' # 20201126: add IO ns
 
-        self.call_read_do_req = ElfinIODReadRequest()
-        self.call_read_di_req = ElfinIODReadRequest()
-        self.call_read_do_req.data = True
-        self.call_read_di_req.data = True
-        self.call_read_do = rospy.ServiceProxy(self.elfin_IO_ns+'read_do',ElfinIODRead)
-        self.call_read_di = rospy.ServiceProxy(self.elfin_IO_ns+'read_di',ElfinIODRead)
+        self.get_endDO = rospy.Subscriber("/elfin_ros_control/elfin_endDO",Int32MultiArray, self.endDO_cb)
+        self.get_endDI = rospy.Subscriber("/elfin_ros_control/elfin_endDI",Int32MultiArray, self.endDI_cb)
         # 20201126: add service for write_do
-        self.call_write_DO=rospy.ServiceProxy(self.elfin_IO_ns+'write_do',ElfinIODWrite)
+        self.call_write_DO=rospy.ServiceProxy("/elfin_ros_control/set_endDO",ElfinDOCmd)
         
         self.elfin_basic_api_ns='elfin_basic_api/'
+        self.elfin_control_ns = '/elfin_ros_control/'
+
+        self.set_robot_override = rospy.ServiceProxy(self.elfin_control_ns+'set_override', 
+                                                  SetFloat64)
+        self.robot_override=SetFloat64Request()
         
         self.joint_names=rospy.get_param(self.controller_ns+'joints', [])
-        
         self.ref_link_name=self.group.get_planning_frame()
         self.end_link_name=self.group.get_end_effector_link()
         
@@ -98,7 +98,13 @@ class MyFrame(wx.Frame):
         self.end_link_lock=threading.Lock()
         self.DO_btn_lock = threading.Lock() # 20201208: add the threading lock
         self.DI_show_lock = threading.Lock()
-                
+        self.update_vel_lock = threading.Lock()
+        self.dif_vel_time = 0
+        self.last_update_vel = 0
+        self.get_state_first = False
+        self.has_update_control  = False
+        self.error_stop = False
+        self.has_update_freedriver = 0
         self.js_display=[0]*6 # joint_states
         self.jm_button=[0]*6 # joints_minus
         self.jp_button=[0]*6 # joints_plus
@@ -115,16 +121,18 @@ class MyFrame(wx.Frame):
         self.LED_display=[0]*4 # LED states
         self.End_btn_display=[0]*4 # end button states
 
-        self.btn_height=370 # 20201126: from 390 change to 370
+        self.btn_height=450 # 20201126: from 390 change to 370
+        self.level_btn_height = 370
         self.btn_path = os.path.dirname(os.path.realpath(__file__)) # 20201209: get the elfin_gui.py path
         btn_lengths=[]
-        self.DO_DI_btn_length=[0,92,157,133] # 20201209: the length come from servo on, servo off, home, stop button
+        self.DO_DI_btn_length=[0,73,73,73] # 20201209: the length come from servo on, servo off, home, stop button
         self.btn_interstice=22 # 20201209: come from btn_interstice
 
         self.display_init()              
         self.key=[]
         self.DO_btn=[0,0,0,0,0,0,0,0] # DO state, first four bits is DO, the other is LED
         self.DI_show=[0,0,0,0,0,0,0,0] # DI state, first four bits is DI, the other is the end button
+        self.level_btn = [1,2,3,4,5,6]
                 
         self.power_on_btn=wx.Button(self.panel, label=' Servo On ', name='Servo On',
                                     pos=(20, self.btn_height))
@@ -146,6 +154,81 @@ class MyFrame(wx.Frame):
         self.stop_btn=wx.Button(self.panel, label='Stop', name='Stop')
         btn_lengths.append(self.stop_btn.GetSize()[0])
         btn_total_length+=btn_lengths[4]
+
+        self.open_freedriver_btn = wx.Button(self.panel, label = "Open FreeDriver", name = "Open FreeDriver")
+        self.open_freedriver_btn.SetPosition((20, self.btn_height+40))
+
+        self.close_freedriver_btn = wx.Button(self.panel, label = "Close FreeDriver", name = "Close FreeDriver")
+        self.close_freedriver_btn.SetPosition((20, self.btn_height+80))
+
+        self.open_controller_btn = wx.Button(self.panel, label = "OpenROSControl", name = "OpenROSControl")
+        self.open_controller_btn.SetPosition((20, self.btn_height+120))
+
+        self.close_controller_btn = wx.Button(self.panel, label = "CloseROSControl", name = "CloseROSControl")
+        self.close_controller_btn.SetPosition((20, self.btn_height+160))
+
+        self.last_level_name = None
+        self.last_level_obj = None
+        self.level1_btn = wx.Button(self.panel, label = "Level-1", name = "Level-1")
+        self.level2_btn = wx.Button(self.panel, label = "Level-2", name = "Level-2")
+        self.level3_btn = wx.Button(self.panel, label = "Level-3", name = "Level-3")
+        self.level4_btn = wx.Button(self.panel, label = "Level-4", name = "Level-4")
+        self.level5_btn = wx.Button(self.panel, label = "Level-5", name = "Level-5")
+        self.level6_btn = wx.Button(self.panel, label = "Level-6", name = "Level-6")
+        
+
+        self.security_level_label=wx.StaticText(self.panel, label='Security Level',
+                                           pos=(20, self.btn_height-130))
+        self.level1_btn.SetPosition((20, self.btn_height-100))
+        self.level2_btn.SetPosition((120, self.btn_height-100))
+        self.level3_btn.SetPosition((220, self.btn_height-100))
+        self.level4_btn.SetPosition((320, self.btn_height-100))
+        self.level5_btn.SetPosition((420, self.btn_height-100))
+        self.level6_btn.SetPosition((520, self.btn_height-100))
+
+        self.call_set_level=rospy.ServiceProxy(self.elfin_control_ns+'set_security_level', SetInt16)
+        self.call_level1_req=SetInt16Request()
+        self.call_level1_req.data = self.level_btn[0]
+        self.level1_btn.Bind(wx.EVT_BUTTON, 
+                           lambda evt, cl=self.call_set_level,
+                           rq=self.call_level1_req :
+                           self.call_set_security_level(evt, cl, rq))
+        
+        self.call_level2_req=SetInt16Request()
+        self.call_level2_req.data = self.level_btn[1]
+        self.level2_btn.Bind(wx.EVT_BUTTON, 
+                           lambda evt, cl=self.call_set_level,
+                           rq=self.call_level2_req :
+                           self.call_set_security_level(evt, cl, rq))
+
+        self.call_level3_req=SetInt16Request()
+        self.call_level3_req.data = self.level_btn[2]
+        self.level3_btn.Bind(wx.EVT_BUTTON, 
+                           lambda evt, cl=self.call_set_level,
+                           rq=self.call_level3_req :
+                           self.call_set_security_level(evt, cl, rq))
+        
+        self.call_level4_req=SetInt16Request()
+        self.call_level4_req.data = self.level_btn[3]
+        self.level4_btn.Bind(wx.EVT_BUTTON, 
+                           lambda evt, cl=self.call_set_level,
+                           rq=self.call_level4_req :
+                           self.call_set_security_level(evt, cl, rq))
+
+        self.call_level5_req=SetInt16Request()
+        self.call_level5_req.data = self.level_btn[4]
+        self.level5_btn.Bind(wx.EVT_BUTTON, 
+                           lambda evt, cl=self.call_set_level,
+                           rq=self.call_level5_req :
+                           self.call_set_security_level(evt, cl, rq))
+        
+        self.call_level6_req=SetInt16Request()
+        self.call_level6_req.data = self.level_btn[5]
+        self.level6_btn.Bind(wx.EVT_BUTTON, 
+                           lambda evt, cl=self.call_set_level,
+                           rq=self.call_level6_req :
+                           self.call_set_security_level(evt, cl, rq))
+
 
         self.btn_interstice=(550-btn_total_length)/4
         btn_pos_tmp=btn_lengths[0]+self.btn_interstice+20 # 20201126: 20:init length + btn0 length + btn_inter:gap
@@ -177,8 +260,8 @@ class MyFrame(wx.Frame):
         self.fault_state_lock=threading.Lock()
 
         # 20201209: add the description of end button
-        self.end_button_state_label=wx.StaticText(self.panel, label='END Button state',
-                                            pos=(555,self.btn_height+172))
+        self.end_button_state_label=wx.StaticText(self.panel, label='EndButtonState',
+                                            pos=(550,self.btn_height+172))
         
         self.reply_show_label=wx.StaticText(self.panel, label='Result:',
                                            pos=(20, self.btn_height+260)) # 20201126: btn_height from 120 change to 260.
@@ -209,16 +292,16 @@ class MyFrame(wx.Frame):
                                               default=0.4)
         default_velocity_scaling=str(round(velocity_scaling_init, 2))
         self.velocity_setting_label=wx.StaticText(self.panel, label='Velocity Scaling',
-                                                  pos=(20, self.btn_height-55)) # 20201126: btn_height from 70 change to 55
+                                                  pos=(20, self.btn_height-65)) # 20201126: btn_height from 70 change to 55
         self.velocity_setting=wx.Slider(self.panel, value=int(velocity_scaling_init*100),
                                         minValue=1, maxValue=100,
                                         style = wx.SL_HORIZONTAL,
                                         size=(500, 30),
-                                        pos=(45, self.btn_height-35)) # 20201126: btn_height from 70 change to 35
+                                        pos=(45, self.btn_height-45)) # 20201126: btn_height from 70 change to 35
         self.velocity_setting_txt_lower=wx.StaticText(self.panel, label='1%',
-                                                    pos=(20, self.btn_height-35)) # 20201126: btn_height from 45 change to 35
+                                                    pos=(20, self.btn_height-45)) # 20201126: btn_height from 45 change to 35
         self.velocity_setting_txt_upper=wx.StaticText(self.panel, label='100%',
-                                                    pos=(550, self.btn_height-35))# 20201126: btn_height from 45 change to 35
+                                                    pos=(550, self.btn_height-45))# 20201126: btn_height from 45 change to 35
         self.velocity_setting_show=wx.TextCtrl(self.panel, 
                                                style=(wx.TE_CENTER|wx.TE_READONLY), 
                                                 value=default_velocity_scaling,
@@ -258,7 +341,7 @@ class MyFrame(wx.Frame):
                                                  SetInt16)
         self.call_teleop_cart_req=SetInt16Request()
         
-        self.call_teleop_stop=rospy.ServiceProxy(self.elfin_basic_api_ns+'stop_teleop', 
+        self.call_teleop_stop=rospy.ServiceProxy('/elfin_ros_control/stop_robotMove', 
                                                  SetBool)
         self.call_teleop_stop_req=SetBoolRequest()
         
@@ -271,7 +354,7 @@ class MyFrame(wx.Frame):
                            rq=self.call_stop_req :
                            self.call_set_bool_common(evt, cl, rq))
             
-        self.call_reset=rospy.ServiceProxy(self.elfin_driver_ns+'clear_fault', SetBool)
+        self.call_reset=rospy.ServiceProxy(self.elfin_control_ns+'reset_robot', SetBool)
         self.call_reset_req=SetBoolRequest()
         self.call_reset_req.data=True
         self.reset_btn.Bind(wx.EVT_BUTTON, 
@@ -279,7 +362,7 @@ class MyFrame(wx.Frame):
                            rq=self.call_reset_req :
                            self.call_set_bool_common(evt, cl, rq))
                 
-        self.call_power_on=rospy.ServiceProxy(self.elfin_basic_api_ns+'enable_robot', SetBool)
+        self.call_power_on=rospy.ServiceProxy(self.elfin_control_ns+'enable_robot', SetBool)
         self.call_power_on_req=SetBoolRequest()
         self.call_power_on_req.data=True
         self.power_on_btn.Bind(wx.EVT_BUTTON, 
@@ -287,7 +370,7 @@ class MyFrame(wx.Frame):
                                rq=self.call_power_on_req :
                                self.call_set_bool_common(evt, cl, rq))
         
-        self.call_power_off=rospy.ServiceProxy(self.elfin_basic_api_ns+'disable_robot', SetBool)
+        self.call_power_off=rospy.ServiceProxy(self.elfin_control_ns+'disable_robot', SetBool)
         self.call_power_off_req=SetBoolRequest()
         self.call_power_off_req.data=True
         self.power_off_btn.Bind(wx.EVT_BUTTON, 
@@ -306,6 +389,38 @@ class MyFrame(wx.Frame):
         self.home_btn.Bind(wx.EVT_LEFT_UP,
                            lambda evt, mark=100:
                            self.release_button(evt, mark) )
+
+        self.call_open_freedriver = rospy.ServiceProxy(self.elfin_control_ns+'open_freedriver', SetBool)
+        self.call_freedriver_on_req = SetBoolRequest()
+        self.call_freedriver_on_req.data = True
+        self.open_freedriver_btn.Bind(wx.EVT_LEFT_DOWN, 
+                           lambda evt, cl=self.call_open_freedriver,
+                           rq=self.call_freedriver_on_req :
+                           self.call_set_bool_common(evt, cl, rq))
+
+        self.call_close_freedriver = rospy.ServiceProxy(self.elfin_control_ns+'close_freedriver', SetBool)
+        self.call_freedriver_off_req = SetBoolRequest()
+        self.call_freedriver_off_req.data = True
+        self.close_freedriver_btn.Bind(wx.EVT_LEFT_DOWN, 
+                           lambda evt, cl=self.call_close_freedriver,
+                           rq=self.call_freedriver_off_req :
+                           self.call_set_bool_common(evt, cl, rq))
+        
+        self.call_open_control = rospy.ServiceProxy(self.elfin_control_ns+'open_ros_control', SetBool)
+        self.call_open_control_req = SetBoolRequest()
+        self.call_open_control_req.data = True
+        self.open_controller_btn.Bind(wx.EVT_LEFT_DOWN, 
+                           lambda evt, cl=self.call_open_control,
+                           rq=self.call_open_control_req :
+                           self.call_set_bool_common(evt, cl, rq))
+        
+        self.call_close_control = rospy.ServiceProxy(self.elfin_control_ns+'close_ros_control', SetBool)
+        self.call_close_control_req = SetBoolRequest()
+        self.call_close_control_req.data = True
+        self.close_controller_btn.Bind(wx.EVT_LEFT_DOWN, 
+                           lambda evt, cl=self.call_close_control,
+                           rq=self.call_close_control_req :
+                           self.call_set_bool_common(evt, cl, rq))
             
         self.call_set_ref_link=rospy.ServiceProxy(self.elfin_basic_api_ns+'set_reference_link', SetString)
         self.call_set_end_link=rospy.ServiceProxy(self.elfin_basic_api_ns+'set_end_link', SetString)
@@ -419,7 +534,7 @@ class MyFrame(wx.Frame):
         # 20201209: add the DO,LED,DI,end button.
         for i in xrange(len(self.DO_btn_display)):
             self.DO_btn_display[i]=wx.Button(self.panel,label='DO'+str(i),
-                                        pos=(20+(self.DO_DI_btn_length[i]+self.btn_interstice)*i,
+                                        pos=(200+(self.DO_DI_btn_length[i]+self.btn_interstice)*i,
                                         self.btn_height+40))
             self.DO_btn_display[i].Bind(wx.EVT_BUTTON,
                                     lambda evt,marker=i,cl=self.call_write_DO : 
@@ -427,29 +542,33 @@ class MyFrame(wx.Frame):
 
             self.DI_display[i]=wx.TextCtrl(self.panel, style=(wx.TE_CENTER | wx.TE_READONLY), value='DI'+str(i),
                                 size=(self.DO_btn_display[i].GetSize()), 
-                                pos=(20+(self.DO_DI_btn_length[i]+self.btn_interstice)*i,self.btn_height+80))
+                                pos=(200+(self.DO_DI_btn_length[i]+self.btn_interstice)*i,self.btn_height+80))
 
             self.LED_display[i]=wx.Button(self.panel,label='LED'+str(i),
-                                        pos=(20+(self.DO_DI_btn_length[i]+self.btn_interstice)*i,self.btn_height+120))
-            self.LED_display[i].Bind(wx.EVT_BUTTON,
-                                    lambda evt, marker=4+i, cl=self.call_write_DO : 
-                                    self.call_write_DO_command(evt, marker,cl))
+                                        pos=(200+(self.DO_DI_btn_length[i]+self.btn_interstice)*i,self.btn_height+120))
 
             png=wx.Image(self.btn_path+'/btn_icon/End_btn'+str(i)+'_low.png',wx.BITMAP_TYPE_PNG).ConvertToBitmap()
             self.End_btn_display[i]=wx.StaticBitmap(self.panel,-1,png,
-                                                pos=(40+(self.DO_DI_btn_length[i]+self.btn_interstice)*i,
+                                                pos=(220+(self.DO_DI_btn_length[i]+self.btn_interstice)*i,
                                                 self.btn_height+160))
     
     def velocity_setting_cb(self, event):
         current_velocity_scaling=self.velocity_setting.GetValue()*0.01
         self.teleop_api_dynamic_reconfig_client.update_configuration({'velocity_scaling': current_velocity_scaling})
         wx.CallAfter(self.update_velocity_scaling_show, current_velocity_scaling)
-    
+
     def basic_api_reconfigure_cb(self, config):
         if self.velocity_setting_show.GetValue()!=config.velocity_scaling:
+            self.update_vel_lock.acquire()
             self.velocity_setting.SetValue(int(config.velocity_scaling*100))
-            wx.CallAfter(self.update_velocity_scaling_show, config.velocity_scaling)        
-    
+            self.robot_override.data = config.velocity_scaling
+            if self.last_update_vel != self.robot_override.data:
+                resp = self.set_robot_override.call(self.robot_override)
+                self.last_update_vel = self.robot_override.data
+                wx.CallAfter(self.update_reply_show, resp)
+                wx.CallAfter(self.update_velocity_scaling_show, config.velocity_scaling)        
+            self.update_vel_lock.release()
+
     def action_stop(self):
         self.action_client.wait_for_server(timeout=rospy.Duration(secs=0.5))
         self.action_goal.trajectory.header.stamp.secs=0
@@ -472,12 +591,26 @@ class MyFrame(wx.Frame):
     def release_button(self, event, mark):
         self.call_teleop_stop_req.data=True
         resp=self.call_teleop_stop.call(self.call_teleop_stop_req)
-        wx.CallAfter(self.update_reply_show, resp)
+        resp_=self.call_stop.call(self.call_stop_req)
+        wx.CallAfter(self.update_reply_show, resp_)
         event.Skip()
     
+    def call_set_security_level(self, event, client, request):
+        btn=event.GetEventObject()
+        current_name = btn.GetName()
+        if self.last_level_name != current_name:
+            resp=client.call(request)
+            self.last_level_name = current_name
+            if self.last_level_obj != None:
+                self.last_level_obj.SetBackgroundColour(wx.Colour(255,255,255))
+            self.last_level_obj = btn
+            btn.SetBackgroundColour(wx.Colour(200,225,200))
+            wx.CallAfter(self.update_reply_show, resp)
+        event.Skip()
+
     def call_set_bool_common(self, event, client, request):
         btn=event.GetEventObject()
-        check_list=['Servo On', 'Servo Off', 'Clear Fault']
+        check_list=['Servo On', 'Servo Off', 'Clear Fault','Open FreeDriver', 'Close FreeDriver','OpenROSControl','CloseROSControl']
         
         # Check servo state
         if btn.GetName()=='Servo On':
@@ -506,6 +639,19 @@ class MyFrame(wx.Frame):
                 wx.CallAfter(self.update_reply_show, resp)
                 event.Skip()
                 return
+        
+        if btn.GetName() == 'Close FreeDriver':
+            self.close_freedriver_btn.SetBackgroundColour(wx.Colour(200,225,200))
+            self.open_freedriver_btn.SetBackgroundColour(wx.NullColour)
+        if btn.GetName() == 'Open FreeDriver':
+            self.open_freedriver_btn.SetBackgroundColour(wx.Colour(200,225,200))
+            self.close_freedriver_btn.SetBackgroundColour(wx.NullColour)
+        if btn.GetName() == 'OpenROSControl':
+            self.open_controller_btn.SetBackgroundColour(wx.Colour(200,225,200))
+            self.close_controller_btn.SetBackgroundColour(wx.NullColour)
+        if btn.GetName == "CloseROSControl":
+            self.close_controller_btn.SetBackgroundColour(wx.Colour(200,225,200))
+            self.open_controller_btn.SetBackgroundColour(wx.NullColour)
         
         # Check if the button is in check list
         if btn.GetName() in check_list:
@@ -539,74 +685,44 @@ class MyFrame(wx.Frame):
     # 20201201: add function for processing value to DO_btn
     def process_DO_btn(self,value):
         if self.DO_btn_lock.acquire():
-            for i in range(0,8):
-                tmp = (value >> (12 + i)) & 0x01
-                self.DO_btn[i]=tmp
+            self.DO_btn = value
             self.DO_btn_lock.release()
 
     # 20201201: add function to read DO.
-    def call_read_DO_command(self):
-        try:
-            client = self.call_read_do
-            val = client.call(self.call_read_do_req).digital_input
-            self.process_DO_btn(val)
-        except rospy.ServiceException, e:
-            resp=ElfinIODReadResponse()
-            resp.digital_input=0x0000
+    def endDO_cb(self, data):
+        val = data.data
+        self.process_DO_btn(list(val))
 
     # 20201201: add function for processing value
     def process_DI_btn(self,value):
         if self.DI_show_lock.acquire():
-            if value > 0:
-                for i in range(0,8):
-                    tmp = (value >> ( i)) & 0x01
-                    self.DI_show[i]=tmp
-            else:
-                self.DI_show = [0,0,0,0,0,0,0,0]
+            self.DI_show = value
         self.DI_show_lock.release()
     
     # 20201201: add function to read DI.
-    def call_read_DI_command(self):
-        try:
-            client = self.call_read_di
-            val = client.call(self.call_read_di_req).digital_input
-            self.process_DI_btn(val)
-        except rospy.ServiceException, e:
-            resp=ElfinIODReadResponse()
-            resp.digital_input=0x0000
-
-    # 20201202: add function to read DO and DI.
-    def monitor_DO_DI(self,evt):
-        self.call_read_DI_command()
-        self.call_read_DO_command()
+    def endDI_cb(self, data):
+        val = data.data
+        self.process_DI_btn(list(val))
 
     # 20201126: add function to write DO.
     def call_write_DO_command(self, event, marker, client):
         self.justification_DO_btn(marker)
-        request = 0
-        try:
-            self.DO_btn_lock.acquire()
-            for i in range(0,8):
-                request = request + self.DO_btn[i]*pow(2,i)
-            resp=client.call(request << 12)
-            self.DO_btn_lock.release()
-        except rospy.ServiceException, e:
-            self.DO_btn_lock.release()
-            resp=ElfinIODWriteResponse()
-            resp.success=False
-            self.justification_DO_btn(marker)
-            rp=SetBoolResponse()
-            rp.success=False
-            rp.message='no such service for DO control'
-            wx.CallAfter(self.update_reply_show, rp)
 
     # 20201127: add justification to DO_btn
     def justification_DO_btn(self,marker):
         self.DO_btn_lock.acquire()
+        request = ElfinDOCmdRequest()
+        response = ElfinDOCmdResponse()
         if 0 == self.DO_btn[marker]:
             self.DO_btn[marker] = 1
+            request.bit = marker
+            request.val = 1
         else:
              self.DO_btn[marker] = 0
+             request.bit = marker
+             request.val = 0
+        response = self.call_write_DO.call(request)
+        wx.CallAfter(self.update_reply_show, response)
         self.DO_btn_lock.release()
 
     # 20201201: add function to set DO_btn colour
@@ -639,23 +755,9 @@ class MyFrame(wx.Frame):
                 self.LED_display[i-4].SetBackgroundColour(wx.Colour(200,225,200))
         self.DO_btn_lock.release()
 
-    # 20201207: add function to set End_btn colour
-    def set_End_btn_colour(self):
-        self.DI_show_lock.acquire()
-        for i in range(4,8):
-            if 0 == self.DI_show[i]:
-                png=wx.Image(self.btn_path+'/btn_icon/End_btn'+str(i-4)+'_low.png',wx.BITMAP_TYPE_PNG)
-                self.End_btn_display[i-4].SetBitmap(wx.BitmapFromImage(png))
-            else:
-                png=wx.Image(self.btn_path+'/btn_icon/End_btn'+str(i-4)+'_high.png',wx.BITMAP_TYPE_PNG)
-                self.End_btn_display[i-4].SetBitmap(wx.BitmapFromImage(png))
-        self.DI_show_lock.release()
-
     def set_color(self, evt):
         wx.CallAfter(self.set_DO_btn_colour)
         wx.CallAfter(self.set_DI_show_colour)
-        wx.CallAfter(self.set_LED_show_colour)
-        wx.CallAfter(self.set_End_btn_colour)
     
     def show_message_dialog(self, message, cl, rq):
         msg='executing ['+message+']'
@@ -733,7 +835,7 @@ class MyFrame(wx.Frame):
             self.servo_state_show.SetValue('Disabled')
     
     def update_fault_state(self, msg):
-        if msg.data:
+        if msg.data!=0:
             self.fault_state_show.SetBackgroundColour(wx.Colour(225, 200, 200))
             self.fault_state_show.SetValue('Warning')
         else:
@@ -816,9 +918,52 @@ class MyFrame(wx.Frame):
     def fault_state_cb(self, data):
         if self.fault_state_lock.acquire():
             self.fault_state=data.data
+            if(self.fault_state !=0 and not self.error_stop):
+                self.error_stop = True
+                self.call_close_control.call(self.call_close_control_req)
+            elif(self.fault_state ==0 and self.error_stop):
+                self.error_stop = False
+            
             self.fault_state_lock.release()
         wx.CallAfter(self.update_fault_state, data)
     
+    def robot_override_cb(self, data):
+        if data.data != 0.0:
+            cds_override = data.data * 100
+            if abs(self.velocity_setting.GetValue()*0.01-data.data)>=0.01:  
+                if self.dif_vel_time<20:
+                    self.dif_vel_time += 1
+                else:
+                    self.update_vel_lock.acquire()
+                    self.robot_override.data = self.velocity_setting.GetValue()*0.01
+                    resp = self.set_robot_override.call(self.robot_override)
+                    self.dif_vel_time = 0
+                    wx.CallAfter(self.update_reply_show, resp)
+                    self.update_vel_lock.release()
+    
+    def update_control_cb(self, data):
+        if not self.get_state_first:
+            self.get_state_first = True
+            self.has_update_control = not data.data
+        if data.data != self.has_update_control:
+            if data.data: 
+                self.close_controller_btn.SetBackgroundColour(wx.Colour(200,225,200))
+                self.open_controller_btn.SetBackgroundColour(wx.NullColour)
+            else:
+                self.open_controller_btn.SetBackgroundColour(wx.Colour(200,225,200))
+                self.close_controller_btn.SetBackgroundColour(wx.NullColour)
+        self.has_update_control = data.data
+
+    def update_freedriver_cb(self, data):
+        if data.data != self.has_update_freedriver:
+            if data.data == 31:
+                    self.open_freedriver_btn.SetBackgroundColour(wx.Colour(200,225,200))
+                    self.close_freedriver_btn.SetBackgroundColour(wx.NullColour)
+            else:
+                    self.open_freedriver_btn.SetBackgroundColour(wx.NullColour)
+                    self.close_freedriver_btn.SetBackgroundColour(wx.Colour(200,225,200))
+        self.has_update_freedriver = data.data
+
     def ref_link_name_cb(self, data):
         if self.ref_link_lock.acquire():
             self.ref_link_name=data.data
@@ -830,12 +975,13 @@ class MyFrame(wx.Frame):
             self.end_link_lock.release()
         
     def listen(self):
-        rospy.Subscriber(self.elfin_driver_ns+'enable_state', Bool, self.servo_state_cb)
-        rospy.Subscriber(self.elfin_driver_ns+'fault_state', Bool, self.fault_state_cb)
+        rospy.Subscriber('/elfin_ros_control/elfin_enable', Bool, self.servo_state_cb)
+        rospy.Subscriber('/elfin_ros_control/elfin_errorCode', Int32, self.fault_state_cb)
         rospy.Subscriber(self.elfin_basic_api_ns+'reference_link_name', String, self.ref_link_name_cb)
         rospy.Subscriber(self.elfin_basic_api_ns+'end_link_name', String, self.end_link_name_cb)
-
-        rospy.Timer(rospy.Duration(nsecs=50000000), self.monitor_DO_DI)
+        rospy.Subscriber('/elfin_override', Float64, self.robot_override_cb)
+        rospy.Subscriber("/elfin_ros_control/controller_state", Bool, self.update_control_cb)
+        rospy.Subscriber("elfin_ros_control/elfin_curFSM", Int32, self.update_freedriver_cb)
         rospy.Timer(rospy.Duration(nsecs=50000000), self.set_color)
         rospy.Timer(rospy.Duration(nsecs=50000000), self.monitor_status)
   

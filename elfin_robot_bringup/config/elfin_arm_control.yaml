@@ -1,5 +1,5 @@
 elfin_arm_controller:
-  type: elfin_pos_vel_controllers/JointTrajectoryController
+  type: position_controllers/JointTrajectoryController
   joints:
      - elfin_joint1
      - elfin_joint2
@@ -13,3 +13,19 @@ elfin_arm_controller:
   stop_trajectory_duration: 0.05
   state_publish_rate:  25
   action_monitor_rate: 10
+
+
+# forward_joint_traj_controller:
+#     type: pass_through_controllers/JointTrajectoryController
+#     joints:
+#      - elfin_joint1
+#      - elfin_joint2
+#      - elfin_joint3
+#      - elfin_joint4
+#      - elfin_joint5
+#      - elfin_joint6
+
+robot_status_controller:
+  type: industrial_robot_status_controller/IndustrialRobotStatusController
+  handle_name: industrial_robot_status_handle
+  publish_rate: 10

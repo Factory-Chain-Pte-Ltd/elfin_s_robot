@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 2.8.3)
-project(elfin_posvel_joint_trajectory_controller)
+cmake_minimum_required(VERSION 3.5.2)
+project(elfin_tcp)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
 # add_compile_options(-std=c++11)
@@ -7,11 +7,11 @@ project(elfin_posvel_joint_trajectory_controller)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS
-  controller_interface
-  elfin_hardware_interface
-  joint_trajectory_controller
+find_package(catkin COMPONENTS
   roscpp
+  rospy
+  std_msgs
+  REQUIRED
 )
 
 ## System dependencies are found with CMake's conventions
@@ -71,7 +71,7 @@ find_package(catkin REQUIRED COMPONENTS
 ## Generate added messages and services with any dependencies listed here
 # generate_messages(
 #   DEPENDENCIES
-#   std_msgs  # Or other packages containing msgs
+#   std_msgs
 # )
 
 ################################################
@@ -105,9 +105,9 @@ find_package(catkin REQUIRED COMPONENTS
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
  INCLUDE_DIRS include
- LIBRARIES elfin_posvel_joint_trajectory_controller
- CATKIN_DEPENDS controller_interface elfin_hardware_interface joint_trajectory_controller roscpp
-#  DEPENDS system_lib
+ LIBRARIES elfin_tcp
+ CATKIN_DEPENDS roscpp rospy std_msgs 
+ DEPENDS system_lib
 )
 
 ###########
@@ -121,35 +121,59 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
 )
 
+link_libraries(${JSONCPP_LIBRARIES})
+
 ## Declare a C++ library
-add_library(${PROJECT_NAME}
-  src/elfin_posvel_joint_trajectory_controller.cpp
+add_library(${PROJECT_NAME} SHARED
+src/elfin_tcp_data.cpp
+include/${PROJECT_NAME}/elfin_tcp_data.h
+)
+
+add_library(elfin_control SHARED
+src/elfin_tcp_control.cpp
+include/${PROJECT_NAME}/elfin_tcp_control.h
+)
+
+add_library(elfin_servo SHARED
+src/elfin_servo_control.cpp
+include/${PROJECT_NAME}/elfin_servo_control.h
+)
+
+add_library(elfin_state SHARED
+src/elfin_tcp_state.cpp
+include/${PROJECT_NAME}/elfin_tcp_state.h
 )
 
 ## Add cmake target dependencies of the library
 ## as an example, code may need to be generated before libraries
 ## either from message generation or dynamic reconfigure
-add_dependencies(${PROJECT_NAME} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(${PROJECT_NAME}
+ ${catkin_LIBRARIES} ${LAPACK_LIBRARIES}
+)
+target_link_libraries(elfin_control
+ ${catkin_LIBRARIES} ${LAPACK_LIBRARIES}
+)
 
+target_link_libraries(elfin_servo
+ ${catkin_LIBRARIES} ${LAPACK_LIBRARIES}
+)
+
+target_link_libraries(elfin_state
+ ${catkin_LIBRARIES} ${LAPACK_LIBRARIES}  jsoncpp
+)
 ## Declare a C++ executable
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
-# add_executable(${PROJECT_NAME}_node src/elfin_posvel_joint_trajectory_controller_node.cpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
 ## target back to the shorter version for ease of user use
 ## e.g. "rosrun someones_pkg node" instead of "rosrun someones_pkg someones_pkg_node"
-# set_target_properties(${PROJECT_NAME}_node PROPERTIES OUTPUT_NAME node PREFIX "")
 
 ## Add cmake target dependencies of the executable
 ## same as for the library above
-# add_dependencies(${PROJECT_NAME}_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
-target_link_libraries(${PROJECT_NAME}
-  ${catkin_LIBRARIES}
-)
 
 #############
 ## Install ##
@@ -160,37 +184,42 @@ target_link_libraries(${PROJECT_NAME}
 
 ## Mark executable scripts (Python etc.) for installation
 ## in contrast to setup.py, you can choose the destination
-# install(PROGRAMS
+# catkin_install_python(PROGRAMS
 #   scripts/my_python_script
 #   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 # )
 
-## Mark executables and/or libraries for installation
-install(TARGETS ${PROJECT_NAME}
-  ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-  LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
+## Mark executables for installation
+## See http://docs.ros.org/melodic/api/catkin/html/howto/format1/building_executables.html
+# install(TARGETS ${PROJECT_NAME}_node
+#   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+# )
+
+## Mark libraries for installation
+## See http://docs.ros.org/melodic/api/catkin/html/howto/format1/building_libraries.html
+
 
 ## Mark cpp header files for installation
-install(DIRECTORY include/${PROJECT_NAME}/
-  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
-  FILES_MATCHING PATTERN "*.h"
-  PATTERN ".svn" EXCLUDE
-)
+#install(DIRECTORY include/${PROJECT_NAME}/
+#  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
+#  FILES_MATCHING PATTERN "*.h"
+#  PATTERN ".svn" EXCLUDE
+#)
+
 
 ## Mark other files for installation (e.g. launch and bag files, etc.)
-install(FILES
-  elfin_posvel_joint_trajectory_plugins.xml
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
-)
+# install(FILES
+#   # myfile1
+#   # myfile2
+#   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+# )
 
 #############
 ## Testing ##
 #############
 
 ## Add gtest based cpp test target and link libraries
-# catkin_add_gtest(${PROJECT_NAME}-test test/test_elfin_posvel_joint_trajectory_controller.cpp)
+# catkin_add_gtest(${PROJECT_NAME}-test test/test_elfin_tcp.cpp)
 # if(TARGET ${PROJECT_NAME}-test)
 #   target_link_libraries(${PROJECT_NAME}-test ${PROJECT_NAME})
 # endif()

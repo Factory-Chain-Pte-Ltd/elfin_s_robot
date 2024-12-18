@@ -1,0 +1,6 @@
+
+elfin_ethernet_name: enp111s0
+
+elfin: 
+    reduction_ratios: [101, 101, 101, 101, 101, 101]
+    count_zeros: [-85063, -493685, -165841, 13754749, 6287493, 15874096]
